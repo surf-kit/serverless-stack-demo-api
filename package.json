@@ -3,9 +3,7 @@
   "version": "1.0.0",
   "description": "Refer to the tutorial on [how to deploy](http://serverless-stack.com/chapters/deploy-the-apis.html) this.",
   "main": "handler.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "scripts": {},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AnomalyInnovations/serverless-stack-demo-api.git"
