@@ -4,16 +4,12 @@ service: notes-app-api
 plugins:
   - serverless-webpack
 
-# Enable auto-packing of external modules
-custom:
-  webpackIncludeModules: true
-
 provider:
   name: aws
   runtime: nodejs6.10
   stage: prod
   region: us-east-1
-
+  profile: xxxx
   # 'iamRoleStatement' defines the permission policy for the Lambda function.
   # In this case Lambda functions are granted with permissions to access DynamoDB.
   iamRoleStatements:
@@ -27,6 +23,8 @@ provider:
         - dynamodb:UpdateItem
         - dynamodb:DeleteItem
       Resource: "arn:aws:dynamodb:us-east-1:*:*"
+
+custom: ${file(./env.yml)}
 
 functions:
   # Defines an HTTP API endpoint that calls the main function in create.js
@@ -91,3 +89,215 @@ functions:
           method: delete
           cors: true
           authorizer: aws_iam
+
+resources:
+  Resources:
+    NotesDynamoDbTable:
+      Type: 'AWS::DynamoDB::Table'
+      Properties:
+        AttributeDefinitions:
+          -
+            AttributeName: userId
+            AttributeType: S
+          -
+            AttributeName: noteId
+            AttributeType: S
+        KeySchema:
+          -
+            AttributeName: userId
+            KeyType: HASH
+          -
+            AttributeName: noteId
+            KeyType: RANGE
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        TableName: 'notes'
+    NotesBucket:
+      Type: "AWS::S3::Bucket"
+      Properties: 
+        AccessControl: BucketOwnerFullControl
+        BucketName: ${self:custom.NOTES_UPLOAD_BUCKET_NAME}
+        CorsConfiguration:
+          CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST, HEAD]
+            AllowedOrigins: ['*']
+            Id: myCORSRuleId1
+            MaxAge: '3000'
+    UserPool:
+      Type: "AWS::Cognito::UserPool"
+      Properties:
+        UserPoolName: ${self:custom.USER_POOL_NAME}
+        AutoVerifiedAttributes:
+          - email
+        #EmailVerificationMessage: String
+        #EmailVerificationSubject: String
+        Schema:
+          - Name: name
+            AttributeDataType: String
+            Mutable: true
+            Required: true
+          - Name: email
+            AttributeDataType: String
+            Mutable: false
+            Required: true
+    UserPoolClient:
+      Type: "AWS::Cognito::UserPoolClient"
+      Properties:
+        ClientName: ${self:custom.USER_POOL_APP_CLIENT}
+        RefreshTokenValidity: 30
+        ExplicitAuthFlows: [ADMIN_NO_SRP_AUTH]
+        GenerateSecret: false
+        UserPoolId: 
+          Ref: UserPool
+    IdentityPool:
+      Type: "AWS::Cognito::IdentityPool"
+      Properties:
+        IdentityPoolName: ${self:custom.IDENTITY_POOL}
+        AllowUnauthenticatedIdentities: true
+        CognitoIdentityProviders: 
+          - ClientId: 
+              Ref: UserPoolClient
+            ProviderName: 
+              Fn::GetAtt: [ UserPool, ProviderName ]
+    CognitoAuthorizedRole:
+      Type: "AWS::IAM::Role"
+      Properties:
+        RoleName: ${self:custom.COGNITO_AUTHORIZED_ROLE_NAME}
+        AssumeRolePolicyDocument: 
+          Version: "2012-10-17"
+          Statement:
+            - Effect: "Allow"
+              Principal: 
+                Federated: "cognito-identity.amazonaws.com"
+              Action: 
+                - "sts:AssumeRoleWithWebIdentity"
+              Condition:
+                StringEquals: 
+                  "cognito-identity.amazonaws.com:aud":
+                    Ref: IdentityPool
+        Policies:
+          - PolicyName: ${self:custom.COGNITO_AUTHORIZED_POLICY}
+            PolicyDocument: 
+              Version: "2012-10-17"
+              Statement: 
+                - Effect: "Allow"
+                  Action:
+                    - "mobileanalytics:PutEvents"
+                    - "cognito-sync:*"
+                    - "cognito-identity:*"
+                  Resource: "*"
+          - PolicyName: ${self:custom.COGNITO_AUTHORIZED_S3_POLICY}
+            PolicyDocument: 
+              Version: "2012-10-17"
+              Statement: 
+                - Effect: "Allow"
+                  Action:
+                    - "s3:*"
+                  Resource: arn:aws:s3:::${self:custom.NOTES_UPLOAD_BUCKET_NAME}/*
+          - PolicyName: ${self:custom.COGNITO_AUTHORIZED_API_POLICY}
+            PolicyDocument: 
+              Version: "2012-10-17"
+              Statement: 
+                - Effect: "Allow"
+                  Action:
+                    - "execute-api:Invoke"
+                  Resource: "arn:aws:execute-api:${self:custom.REGION}:*:*/*"
+    IdentityPoolRoleMapping:
+      Type: "AWS::Cognito::IdentityPoolRoleAttachment"
+      Properties:
+        IdentityPoolId: 
+          Ref: IdentityPool
+        Roles:
+          authenticated: 
+            Fn::GetAtt: [ CognitoAuthorizedRole, Arn ]
+    StaticWebsiteBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        AccessControl: PublicRead
+        BucketName: ${self:custom.NOTES_WEBSITE_BUCKET_NAME}
+        WebsiteConfiguration:
+          IndexDocument: index.html
+          ErrorDocument: index.html
+    StaticWebsiteBucketPolicy: # TODO: Add to another stack
+      Type: "AWS::S3::BucketPolicy"
+      Properties: 
+        Bucket:
+          Ref: StaticWebsiteBucket
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement: 
+            - Action: 
+                - "s3:GetObject"
+              Effect: "Allow"
+              Resource: "arn:aws:s3:::${self:custom.NOTES_WEBSITE_BUCKET_NAME}/*"
+              Principal: "*"
+    CloudFrontDistribution: # TODO: Add to another stack cause it takes too long to get it ready
+      Type: AWS::CloudFront::Distribution
+      Properties:
+        DistributionConfig:
+          Origins:
+          - DomainName: 
+              Fn::GetAtt: [ StaticWebsiteBucket, DomainName ]
+            Id: myS3Origin
+            CustomOriginConfig:
+                HTTPPort: 80
+                HTTPSPort: 443
+                OriginProtocolPolicy: https-only
+          Enabled: 'true'
+          Comment: This is my React App CloudFront Distribution
+          DefaultRootObject: index.html
+          CustomErrorResponses:
+            - ErrorCode: 404
+              ResponseCode: 200
+              ResponsePagePath: /index.html
+          DefaultCacheBehavior:
+            AllowedMethods:
+              - GET
+              - HEAD
+            TargetOriginId: myS3Origin
+            ForwardedValues:
+              QueryString: 'false'
+              Cookies:
+                Forward: none
+            ViewerProtocolPolicy: redirect-to-https
+          PriceClass: PriceClass_100
+          ViewerCertificate:
+            CloudFrontDefaultCertificate: 'true'
+  Outputs:
+    UserPoolId:
+      Value:
+        Ref: UserPool
+      Export:
+        Name: "UserPool::Id"
+    UserPoolClientId:
+      Value:
+        Ref: UserPoolClient
+      Export:
+        Name: "UserPoolClient::Id"
+    IdentityPoolId:
+      Value:
+        Ref: IdentityPool
+      Export:
+        Name: "IdentityPool::Id"
+    CognitoAuthorizedRoleArn:
+      Value:
+        Fn::GetAtt: [ CognitoAuthorizedRole, Arn ]
+      Export:
+        Name: "CognitoAuthorizedRole::Arn"
+    APIGatewayID:
+      Value:
+        Fn::GetAtt: [ ApiGatewayRestApi, RootResourceId ]
+      Export:
+        Name: "APIGatewayID::Id"
+    CloudFrontDistributionId:
+      Value:
+        Ref: CloudFrontDistribution
+      Export:
+        Name: "CloudFrontDistribution::Id"
+    CloudFrontDistributionDomainName:
+      Value:
+        Fn::GetAtt: [ CloudFrontDistribution, DomainName ]
+      Export:
+        Name: "CloudFrontDistribution::DomainName"

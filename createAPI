@@ -1,0 +1,70 @@
+#!/bin/bash
+
+echo "Getting environment variables..."
+PROFILE=`grep 'PROFILE:' env.yml | tail -n1 | awk '{ print $2}'`
+COGNITO_AUTHORIZED_ROLE_NAME=`grep 'COGNITO_AUTHORIZED_ROLE_NAME:' env.yml | tail -n1 | awk '{ print $2}'`
+COGNITO_AUTHORIZED_S3_POLICY=`grep 'COGNITO_AUTHORIZED_S3_POLICY:' env.yml | tail -n1 | awk '{ print $2}'`
+COGNITO_AUTHORIZED_API_POLICY=`grep 'COGNITO_AUTHORIZED_API_POLICY:' env.yml | tail -n1 | awk '{ print $2}'`
+REGION=`grep 'REGION:' env.yml | tail -n1 | awk '{ print $2}'`
+
+echo "Deploying web application API"
+sls deploy
+echo "------------------------------------------------------------------------------"
+
+echo "Adding s3 policy on $COGNITO_AUTHORIZED_ROLE_NAME"
+json='{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Action": [
+                "s3:*"
+            ],
+            "Resource": "arn:aws:s3:::kendoo-notes-app-uploads/${cognito-identity.amazonaws.com:sub}*",
+            "Effect": "Allow"
+        }
+    ]
+}'
+echo $json > $COGNITO_AUTHORIZED_S3_POLICY.json
+aws iam put-role-policy --role-name $COGNITO_AUTHORIZED_ROLE_NAME \
+    --policy-name $COGNITO_AUTHORIZED_S3_POLICY \
+    --policy-document file://$COGNITO_AUTHORIZED_S3_POLICY.json \
+    --profile $PROFILE
+
+echo "Adding API Gateway policy on $COGNITO_AUTHORIZED_ROLE_NAME"
+#APIGatewayID=`sls info --verbose | grep APIGatewayID: | awk -F": " '{ print $2 }'`
+APIGatewayID=`aws apigateway get-rest-apis --profile xxx | grep id | awk -F": " '{ print $2 }' | awk -F "\"" '{ print $2 }'`
+json='{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Action": [
+                "execute-api:Invoke"
+            ],
+            "Resource": "arn:aws:execute-api:us-east-1:*:'${APIGatewayID}'/*",
+            "Effect": "Allow"
+        }
+    ]
+}'
+echo $json > $COGNITO_AUTHORIZED_API_POLICY.json
+aws iam put-role-policy --role-name $COGNITO_AUTHORIZED_ROLE_NAME \
+	--policy-name $COGNITO_AUTHORIZED_API_POLICY \
+	--policy-document file://$COGNITO_AUTHORIZED_API_POLICY.json \
+	--profile $PROFILE
+
+echo "Creating a cognito test user"
+UserPoolClientId=`sls info --verbose | grep UserPoolClientId: | awk -F": " '{ print $2 }'`
+UserPoolId=`sls info --verbose | grep UserPoolId: | awk -F": " '{ print $2 }'`
+aws cognito-idp sign-up \
+ --region $REGION \
+ --client-id $UserPoolClientId \
+ --username admin \
+ --password Passw0rd! \
+ --user-attributes '[{"Name": "email", "Value": "admin@example.com"}, {"Name": "name", "Value": "Administrador do sistema"}]' \
+ --profile $PROFILE
+
+ echo "Verifying test user"
+ aws cognito-idp admin-confirm-sign-up \
+ --region $REGION \
+ --user-pool-id $UserPoolId \
+ --username admin \
+ --profile $PROFILE

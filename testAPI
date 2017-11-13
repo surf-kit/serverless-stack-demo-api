@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# YML Config
+PROFILE=`grep 'PROFILE:' env.yml | tail -n1 | awk '{ print $2}'`
+COGNITO_AUTHORIZED_ROLE_NAME=`grep 'COGNITO_AUTHORIZED_ROLE_NAME:' env.yml | tail -n1 | awk '{ print $2}'`
+COGNITO_AUTHORIZED_S3_POLICY=`grep 'COGNITO_AUTHORIZED_S3_POLICY:' env.yml | tail -n1 | awk '{ print $2}'`
+COGNITO_AUTHORIZED_API_POLICY=`grep 'COGNITO_AUTHORIZED_API_POLICY:' env.yml | tail -n1 | awk '{ print $2}'`
+REGION=`grep 'REGION:' env.yml | tail -n1 | awk '{ print $2}'`
+
+UserPoolClientId=`sls info --verbose | grep UserPoolClientId: | awk -F": " '{ print $2 }'`
+UserPoolId=`sls info --verbose | grep UserPoolId: | awk -F": " '{ print $2 }'`
+IdentityPoolId=`sls info --verbose | grep IdentityPoolId: | awk -F": " '{ print $2 }'`
+ServiceEndpoint=`sls info --verbose | grep ServiceEndpoint: | awk -F": " '{ print $2 }'`
+
+echo $UserPoolClientId
+echo $UserPoolId
+echo $IdentityPoolId
+echo $ServiceEndpoint
+
+echo "Testing API"
+apig-test \
+--username='admin' \
+--password='Passw0rd!' \
+--user-pool-id=$UserPoolId \
+--app-client-id=$UserPoolClientId \
+--cognito-region=$REGION \
+--identity-pool-id=$IdentityPoolId \
+--invoke-url=$ServiceEndpoint \
+--api-gateway-region=$REGION \
+--path-template='/notes' \
+--method='POST' \
+--body='{"content":"hello world","attachment":"hello.jpg"}'
